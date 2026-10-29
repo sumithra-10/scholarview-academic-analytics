@@ -10,12 +10,53 @@ From this project folder, create and activate a virtual environment, then instal
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+Copy-Item .streamlit\secrets.toml.example .streamlit\secrets.toml
+# Edit .streamlit\secrets.toml and set a private username and a long, unique password.
 python -m streamlit run app.py
 ```
 
 Open the local URL printed by Streamlit, usually `http://localhost:8501`.
 
 If you already have a virtual environment, activate it and run the install and launch commands without creating a new one.
+
+## Sign-in setup
+
+ScholarView requires a username and password before showing the dashboard. For local use, copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and set your own credentials:
+
+```toml
+[auth]
+username = "your-email@example.com"
+password = "a-long-unique-passphrase"
+```
+
+The local secrets file is excluded from Git. Never commit credentials or reuse a password from another account. Streamlit Community Cloud deployments must have the same `[auth]` settings entered in the app's **Settings → Secrets** page. The login is a shared-credential gate for this dashboard; it does not provide individual user accounts or role-based permissions.
+
+## SQLite database and student API
+
+The dashboard can read and manage student records through a local REST API backed by SQLite. The API seeds its database from `data/cleaned_student_data.csv` the first time it starts; later changes are persisted in `data/student_records.sqlite3`.
+
+Open two PowerShell terminals in the project folder. Start the API in the first:
+
+```powershell
+python -m src.student_api
+```
+
+In the second terminal, point the dashboard at that API and run Streamlit:
+
+```powershell
+$env:STUDENT_API_URL = "http://127.0.0.1:8000"
+python -m streamlit run app.py
+```
+
+When connected, the dashboard reads records from the API and the **Student records** tab provides create, update, and delete actions. Without `STUDENT_API_URL`, the dashboard keeps using the bundled CSV; uploaded CSVs are also read-only.
+
+The API provides `GET /students`, `GET /students/{student_id}`, `POST /students`, `PUT /students/{student_id}`, `DELETE /students/{student_id}`, and `GET /health`. Run its request/response tests with:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+The API binds to `127.0.0.1` by default and has no authentication. Keep it local; before exposing it on a network or using a hosted database, put it behind an authenticated HTTPS service and configure access controls. Use only synthetic student data for this demo.
 
 ## Share the app online
 

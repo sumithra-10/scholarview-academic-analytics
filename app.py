@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hmac
 import html
+import os
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
 
@@ -8,6 +11,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
+
+from src.student_api_client import (
+    StudentApiError,
+    create_student,
+    delete_student,
+    list_students,
+    update_student,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -241,20 +253,221 @@ def apply_styles() -> None:
             margin-top: 28px;
             padding-top: 16px;
         }
+        .login-hero {
+            background:
+                radial-gradient(ellipse at 100% 0%, rgba(116,139,255,.32), transparent 38%),
+                linear-gradient(145deg, #121d36 0%, #1c2b50 100%);
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 24px;
+            box-shadow: 0 24px 70px rgba(24,38,72,.16);
+            box-sizing: border-box;
+            color: #fff;
+            min-height: 490px;
+            overflow: hidden;
+            padding: clamp(26px, 5vw, 54px);
+            position: relative;
+        }
+        .login-brand {
+            align-items: center;
+            display: flex;
+            gap: 12px;
+        }
+        .login-brand-mark {
+            align-items: center;
+            background: linear-gradient(145deg, #8495ff, #526cf1);
+            border: 1px solid rgba(255,255,255,.28);
+            border-radius: 13px;
+            box-shadow: 0 8px 22px rgba(79,109,245,.35);
+            display: inline-flex;
+            font: 800 17px 'Manrope', 'Segoe UI', sans-serif;
+            height: 42px;
+            justify-content: center;
+            width: 42px;
+        }
+        .login-brand-name { font: 800 18px 'Manrope', 'Segoe UI', sans-serif; }
+        .login-brand-caption { color: #aab8d5; font-size: 11px; margin-top: 2px; }
+        .login-eyebrow {
+            color: #aab8ff;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .16em;
+            margin-top: 64px;
+            text-transform: uppercase;
+        }
+        .login-hero h1 {
+            color: #fff;
+            font: 800 clamp(30px, 4vw, 45px)/1.13 'Manrope', 'Segoe UI', sans-serif;
+            letter-spacing: -.045em;
+            margin: 13px 0;
+            max-width: 460px;
+        }
+        .login-hero-copy {
+            color: #bdc9df;
+            font-size: 14px;
+            line-height: 1.7;
+            max-width: 390px;
+        }
+        .login-stats {
+            border-top: 1px solid rgba(255,255,255,.15);
+            display: flex;
+            gap: clamp(18px, 4vw, 42px);
+            margin-top: 48px;
+            padding-top: 21px;
+        }
+        .login-stat-value {
+            color: #fff;
+            font: 700 19px 'Manrope', 'Segoe UI', sans-serif;
+        }
+        .login-stat-label { color: #aab8d5; font-size: 11px; margin-top: 4px; }
+        .login-heading {
+            color: var(--ink);
+            font: 800 27px 'Manrope', 'Segoe UI', sans-serif;
+            letter-spacing: -.035em;
+            margin: 3px 0 6px;
+        }
+        .login-subheading { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+        .login-secure-note {
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.6;
+            margin-top: 16px;
+            text-align: center;
+        }
+        @media (max-width: 700px) {
+            [data-testid="stMainBlockContainer"] {
+                padding-left: 1rem;
+                padding-right: 1rem;
+                padding-top: 1rem;
+            }
+            .login-hero { min-height: auto; padding: 26px; }
+            .login-eyebrow { margin-top: 34px; }
+            .login-stats { margin-top: 28px; }
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-@st.cache_data(show_spinner=False)
-def load_student_data(uploaded_bytes: bytes | None = None) -> pd.DataFrame:
-    if uploaded_bytes is None:
-        if not DEFAULT_DATA_PATH.is_file():
-            raise FileNotFoundError(
-                f"Default dataset not found: {DEFAULT_DATA_PATH}"
+def get_auth_credentials() -> tuple[str, str] | None:
+    try:
+        auth_settings = st.secrets["auth"]
+    except (KeyError, StreamlitSecretNotFoundError):
+        return None
+
+    if not isinstance(auth_settings, Mapping):
+        return None
+    username = auth_settings.get("username")
+    password = auth_settings.get("password")
+    if not isinstance(username, str) or not username.strip():
+        return None
+    if not isinstance(password, str) or not password:
+        return None
+    return username, password
+
+
+def credentials_match(
+    submitted_username: str,
+    submitted_password: str,
+    configured_username: str,
+    configured_password: str,
+) -> bool:
+    username_matches = hmac.compare_digest(
+        submitted_username.encode("utf-8"),
+        configured_username.encode("utf-8"),
+    )
+    password_matches = hmac.compare_digest(
+        submitted_password.encode("utf-8"),
+        configured_password.encode("utf-8"),
+    )
+    return username_matches & password_matches
+
+
+def render_login(credentials: tuple[str, str]) -> None:
+    st.markdown(
+        '<style>[data-testid="stMainBlockContainer"] { max-width: 1160px; }</style>',
+        unsafe_allow_html=True,
+    )
+    left, right = st.columns([1.08, 0.92], gap="large", vertical_alignment="center")
+
+    with left:
+        st.markdown(
+            """
+            <section class="login-hero">
+              <div class="login-brand">
+                <span class="login-brand-mark">S</span>
+                <div>
+                  <div class="login-brand-name">ScholarView</div>
+                  <div class="login-brand-caption">Academic intelligence</div>
+                </div>
+              </div>
+              <div class="login-eyebrow">Insight starts here</div>
+              <h1>Every learner has a story worth seeing.</h1>
+              <div class="login-hero-copy">
+                Bring academic progress, attendance and learning needs into
+                focus, so the next step is always clearer.
+              </div>
+              <div class="login-stats">
+                <div><div class="login-stat-value">360°</div><div class="login-stat-label">Student insights</div></div>
+                <div><div class="login-stat-value">4</div><div class="login-stat-label">Core subjects</div></div>
+                <div><div class="login-stat-value">Live</div><div class="login-stat-label">Cohort overview</div></div>
+              </div>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="login-heading">Welcome back</div>'
+                '<div class="login-subheading">Sign in to continue to your dashboard.</div>',
+                unsafe_allow_html=True,
             )
-        frame = pd.read_csv(DEFAULT_DATA_PATH)
+            with st.form("login_form"):
+                username = st.text_input(
+                    "Email address",
+                    autocomplete="username",
+                    key="login_username",
+                )
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                    autocomplete="current-password",
+                    key="login_password",
+                )
+                submitted = st.form_submit_button(
+                    "Sign in",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if submitted:
+                if credentials_match(username, password, *credentials):
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                st.error("That email address or password is incorrect.")
+
+            st.markdown(
+                '<div class="login-secure-note">Your sign-in is protected. '
+                'Contact your administrator if you need help accessing your account.</div>',
+                unsafe_allow_html=True,
+            )
+
+@st.cache_data(show_spinner=False)
+def load_student_data(
+    uploaded_bytes: bytes | None = None,
+    api_base_url: str | None = None,
+) -> pd.DataFrame:
+    if uploaded_bytes is None:
+        if api_base_url:
+            frame = pd.DataFrame(list_students(api_base_url))
+        else:
+            if not DEFAULT_DATA_PATH.is_file():
+                raise FileNotFoundError(
+                    f"Default dataset not found: {DEFAULT_DATA_PATH}"
+                )
+            frame = pd.read_csv(DEFAULT_DATA_PATH)
     else:
         frame = pd.read_csv(BytesIO(uploaded_bytes))
 
@@ -274,19 +487,17 @@ def load_student_data(uploaded_bytes: bytes | None = None) -> pd.DataFrame:
     ]
     for column in numeric_columns:
         if column in frame:
+            original_values = frame[column]
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-    invalid_columns = [
-        column
-        for column in numeric_columns
-        if column in frame
-        and (frame[column].isna() | ~frame[column].between(-1e100, 1e100)).any()
-    ]
-    if invalid_columns:
-        raise ValueError(
-            "Numeric fields contain missing or invalid values: "
-            + ", ".join(invalid_columns)
-        )
+            if column in REQUIRED_COLUMNS[1:]:
+                invalid = frame[column].isna()
+            else:
+                invalid = original_values.notna() & frame[column].isna()
+            invalid |= frame[column].notna() & ~frame[column].between(-1e100, 1e100)
+            if invalid.any():
+                raise ValueError(
+                    "Numeric fields contain missing or invalid values: " + column
+                )
 
     bounded_columns = [
         "Attendance_Percent",
@@ -296,7 +507,7 @@ def load_student_data(uploaded_bytes: bytes | None = None) -> pd.DataFrame:
     out_of_range = [
         column
         for column in bounded_columns
-        if not frame[column].between(0, 100).all()
+        if not frame[column].dropna().between(0, 100).all()
     ]
     if out_of_range:
         raise ValueError(
@@ -617,7 +828,109 @@ def render_overview(frame: pd.DataFrame) -> None:
             )
 
 
-def render_students(frame: pd.DataFrame) -> None:
+def _student_record_inputs(
+    prefix: str,
+    record: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    values = record or {}
+    student_id = st.text_input(
+        "Student ID",
+        value=str(values.get("Student_ID", "")),
+        key=f"{prefix}_student_id",
+    )
+    student: dict[str, object] = {"Student_ID": student_id}
+    fields = [
+        ("Attendance_Percent", "Attendance (%)"),
+        ("Study_Hours_Per_Week", "Study hours per week"),
+        *[
+            (column, column.removeprefix("Subject_") + " score")
+            for column in SCORE_COLUMNS
+        ],
+        *[(column, column.replace("_", " ")) for column in FEATURE_COLUMNS],
+    ]
+    columns = st.columns(2)
+    for index, (field, label) in enumerate(fields):
+        value = values.get(field)
+        default = 0.0 if value is None or pd.isna(value) else float(value)
+        with columns[index % 2]:
+            student[field] = st.number_input(
+                label,
+                min_value=0.0,
+                max_value=None if field == "Study_Hours_Per_Week" else 100.0,
+                value=default,
+                step=1.0,
+                key=f"{prefix}_{field}",
+            )
+    return student
+
+
+def _reload_student_api_data(message: str) -> None:
+    load_student_data.clear()
+    st.session_state["student_api_notice"] = message
+    st.rerun()
+
+
+def render_student_api_controls(
+    frame: pd.DataFrame,
+    api_base_url: str,
+) -> None:
+    with st.expander("Manage student records through the API"):
+        st.caption("Create, update, and delete records in the connected SQLite database.")
+        with st.form("create_student_record"):
+            st.markdown("**Add a student**")
+            new_student = _student_record_inputs("create")
+            create_submitted = st.form_submit_button("Add student")
+        if create_submitted:
+            try:
+                create_student(api_base_url, new_student)
+            except StudentApiError as error:
+                st.error(f"Could not add student: {error}")
+            else:
+                _reload_student_api_data("Student record created.")
+
+        if frame.empty:
+            return
+
+        student_ids = frame["Student_ID"].tolist()
+        selected_id = st.selectbox("Student to edit or delete", student_ids)
+        selected_record = frame.loc[frame["Student_ID"].eq(selected_id)].iloc[0]
+        with st.form("update_student_record"):
+            st.markdown("**Update the selected student**")
+            updated_student = _student_record_inputs(
+                "update", selected_record.to_dict()
+            )
+            updated_student["Student_ID"] = selected_id
+            update_submitted = st.form_submit_button("Save changes")
+        if update_submitted:
+            try:
+                update_student(api_base_url, selected_id, updated_student)
+            except StudentApiError as error:
+                st.error(f"Could not update student: {error}")
+            else:
+                _reload_student_api_data("Student record updated.")
+
+        with st.form("delete_student_record"):
+            confirmed = st.checkbox(
+                f"Confirm deletion of {selected_id}",
+                key="confirm_student_delete",
+            )
+            delete_submitted = st.form_submit_button("Delete selected student")
+        if delete_submitted:
+            if not confirmed:
+                st.warning("Confirm the deletion before removing a student record.")
+            else:
+                try:
+                    delete_student(api_base_url, selected_id)
+                except StudentApiError as error:
+                    st.error(f"Could not delete student: {error}")
+                else:
+                    _reload_student_api_data("Student record deleted.")
+
+
+def render_students(
+    frame: pd.DataFrame,
+    api_base_url: str | None = None,
+) -> None:
     st.markdown(
         '<div class="section-heading">Student records</div>'
         '<div class="section-caption">Search, sort and export the students in the selected cohort.</div>',
@@ -680,6 +993,8 @@ def render_students(frame: pd.DataFrame) -> None:
         file_name="student_performance_filtered.csv",
         mime="text/csv",
     )
+    if api_base_url:
+        render_student_api_controls(frame, api_base_url)
 
 
 def render_student_profile(frame: pd.DataFrame) -> None:
@@ -793,6 +1108,25 @@ def render_student_profile(frame: pd.DataFrame) -> None:
 
 def main() -> None:
     apply_styles()
+    credentials = get_auth_credentials()
+    if credentials is None:
+        st.error(
+            "Sign-in is not configured. Add a username and password to Streamlit "
+            "secrets to protect this dashboard."
+        )
+        st.code(
+            '[auth]\nusername = "your-email@example.com"\npassword = "a-long-unique-passphrase"',
+            language="toml",
+        )
+        st.info("See the README for local setup and Streamlit Community Cloud configuration.")
+        st.stop()
+
+    if not st.session_state.get("authenticated", False):
+        render_login(credentials)
+        st.stop()
+
+    st.session_state.pop("login_username", None)
+    st.session_state.pop("login_password", None)
 
     with st.sidebar:
         st.markdown(
@@ -806,6 +1140,9 @@ def main() -> None:
             """,
             unsafe_allow_html=True,
         )
+        if st.button("Sign out", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.rerun()
         uploaded_file = st.file_uploader(
             "Upload a student CSV",
             type=["csv"],
@@ -823,13 +1160,25 @@ def main() -> None:
             ["All", *SUBJECT_COLUMNS],
         )
 
+    api_base_url = os.environ.get("STUDENT_API_URL", "").strip().rstrip("/") or None
     try:
         students = load_student_data(
-            uploaded_file.getvalue() if uploaded_file is not None else None
+            uploaded_file.getvalue() if uploaded_file is not None else None,
+            api_base_url,
         )
-    except (FileNotFoundError, pd.errors.ParserError, UnicodeDecodeError, ValueError) as error:
+    except (
+        FileNotFoundError,
+        pd.errors.ParserError,
+        UnicodeDecodeError,
+        StudentApiError,
+        ValueError,
+    ) as error:
         st.error(f"Unable to load student data: {error}")
         st.stop()
+
+    api_notice = st.session_state.pop("student_api_notice", None)
+    if api_notice:
+        st.success(api_notice)
 
     with st.sidebar:
         minimum_attendance = float(students["Attendance_Percent"].min())
@@ -879,7 +1228,7 @@ def main() -> None:
         source_label = (
             html.escape(uploaded_file.name)
             if uploaded_file is not None
-            else "Sample dataset"
+            else "SQLite API" if api_base_url else "Sample dataset"
         )
         st.markdown(
             f'<div style="text-align:right"><span class="status-pill">● &nbsp;{source_label}</span></div>',
@@ -897,12 +1246,15 @@ def main() -> None:
     with overview_tab:
         render_overview(cohort)
     with students_tab:
-        render_students(cohort)
+        render_students(
+            cohort,
+            api_base_url if uploaded_file is None else None,
+        )
     with profile_tab:
         render_student_profile(cohort)
 
     st.markdown(
-        '<div class="footer">ScholarView · Student data is processed locally for this dashboard. '
+        '<div class="footer">ScholarView · Student data is served from the configured API or sample dataset. '
         'Use cohort filters to explore the students represented in each view.</div>',
         unsafe_allow_html=True,
     )
